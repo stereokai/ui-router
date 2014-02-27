@@ -70,16 +70,21 @@ function UrlMatcher(pattern) {
   //    [^{}\\]+                  - anything other than curly braces or backslash
   //    \\.                       - a backslash escape
   //    \{(?:[^{}\\]+|\\.)*\}     - a matched set of curly braces containing other atoms
-  var placeholder = /([:*])(\w+)|\{(\w+)(?:\:((?:[^{}\\]+|\\.|\{(?:[^{}\\]+|\\.)*\})+))?\}/g,
+  //    \[(\w+)\]                 - sqaure brackets placeholder (an optional parameter, oppam for short)
+  var placeholder = /([:*])(\w+)|\{(\w+)(?:\:((?:[^{}\\]+|\\.|\{(?:[^{}\\]+|\\.)*\})+))?\}|\[(\w+)\]/g,
       names = {}, compiled = '^', last = 0, m,
       segments = this.segments = [],
-      params = this.params = [];
+      params = this.params = [],
+      // the optionalParams array is currently only used
+      // to check if a certain rule accepts oppams (in the UrlMatacher.prototypeexec function)
+      optionalParams = this.optionalParams = [];
 
-  function addParameter(id) {
-    if (!/^\w+(-+\w+)*$/.test(id)) throw new Error("Invalid parameter name '" + id + "' in pattern '" + pattern + "'");
-    if (names[id]) throw new Error("Duplicate parameter name '" + id + "' in pattern '" + pattern + "'");
-    names[id] = true;
-    params.push(id);
+  function addParameter(paramName, isOptional) {
+    if (!/^\w+(-+\w+)*$/.test(paramName)) throw new Error("Invalid parameter name '" + paramName + "' in pattern '" + pattern + "'");
+    if (names[paramName]) throw new Error("Duplicate parameter name '" + paramName + "' in pattern '" + pattern + "'");
+    names[paramName] = true;
+    params.push(paramName);
+    isOptional && optionalParams.push(paramName);
   }
 
   function quoteRegExp(string) {
@@ -90,15 +95,24 @@ function UrlMatcher(pattern) {
 
   // Split into static segments separated by path parameter placeholders.
   // The number of segments is always 1 more than the number of parameters.
-  var id, regexp, segment;
+  var paramName, regexp, segment;
   while ((m = placeholder.exec(pattern))) {
-    id = m[2] || m[3]; // IE[78] returns '' for unmatched groups instead of null
-    regexp = m[4] || (m[1] == '*' ? '.*' : '[^/]*');
-    segment = pattern.substring(last, m.index);
-    if (segment.indexOf('?') >= 0) break; // we're into the search part
-    compiled += quoteRegExp(segment) + '(' + regexp + ')';
-    addParameter(id);
-    segments.push(segment);
+    paramName = m[2] || m[3] || m[5]; // IE[78] returns '' for unmatched groups instead of null
+    regexp = m[4] || ((m[1] || m[5]) == '*' ? '.*' : '[^/]*');
+
+    // remove trailing slash from segment when adding an oppam
+    segment = pattern.substring(last, m[5] ? m.index-1 : m.index);
+
+    // we're into the search part, so quit this loop
+    if (segment.indexOf('?') >= 0) break;
+
+    // the regexp for an oppam is (?:/([^/]*))? (not capturing but requiring a preceeding slash), whereas for an obligatory one it's ([^/]*)
+    compiled += quoteRegExp(segment) + (m[5] ? '(?:/(' + regexp + '))?' : '(' + regexp + ')');
+    addParameter(paramName, !!m[5]);
+
+    // the oppam syntax yields empty segments (""), and that breaks the exec function algorithm
+    // so don't save those troublesome bits 
+    !!segment && segments.push(segment);
     last = placeholder.lastIndex;
   }
   segment = pattern.substring(last);
@@ -181,13 +195,31 @@ UrlMatcher.prototype.exec = function (path, searchParams) {
   var m = this.regexp.exec(path);
   if (!m) return null;
 
-  var params = this.params, nTotal = params.length,
-    nPath = this.segments.length-1,
-    values = {}, i;
+  var params = this.params,
+      optionalParams = this.optionalParams,
+      rules = this.rules,
+      nTotal = params.length,
+      nPath = this.segments.length-1,
+      values = {};
 
-  if (nPath !== m.length - 1) throw new Error("Unbalanced capture group in route '" + this.source + "'");
 
-  for (i=0; i<nPath; i++) values[params[i]] = m[i+1];
+  //if (nPath !== m.length - 1) throw new Error("Unbalanced capture group in route '" + this.source + "'");
+
+  for (var i = 0; i < nPath; i++) {
+    // this is where the magic happens, and also the part which requires optimization
+    // it works through all rules in reverse order,
+    // runs through each of their segments in reverse order as well,
+    // and checks if the parameter value is in fact part of a UrlMatcher (rule) path (in other words, a segment)
+    if (optionalParams.length && !!m[i+1]) {
+      for (var rule, j = rules.length; rule = rules[--j];) {
+        for (var segment, k = rule.what.segments.length; segment = rule.what.segments[--k];) {
+          if (segment.replace(/\//g, '') === m[i+1]) { return null; }
+        }
+      }
+    }
+
+    values[params[i]] = m[i+1];
+  }
   for (/**/; i<nTotal; i++) values[params[i]] = searchParams[params[i]];
 
   return values;

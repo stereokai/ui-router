@@ -18,6 +18,9 @@ function $UrlRouterProvider(  $urlMatcherFactory) {
   var rules = [], 
       otherwise = null;
 
+  // Expose the rules array to UrlMatchers, for use in identifying oppam mismatch
+  UrlMatcher.prototype.rules = rules;
+
   // Returns a string that is a prefix of all strings matching the RegExp
   function regExpPrefix(re) {
     var prefix = /^\^((?:\\[^a-zA-Z0-9]|[^\\\[\]\^$*+?.()|{}]+)*)/.exec(re.source);

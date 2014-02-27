@@ -197,7 +197,9 @@ function $UrlRouterProvider(  $urlMatcherFactory) {
 
       for (var n in check) {
         if (check[n]) {
-          return this.rule(strategies[n](what, handler));
+          var rule = strategies[n](what, handler);
+          rule.what = what;
+          return this.rule(r);
         }
       }
 
